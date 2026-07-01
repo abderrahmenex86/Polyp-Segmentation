@@ -1,119 +1,103 @@
-import os
 import glob
-from typing import Tuple, List, Dict
+import os
+
 import torch
-from torch.utils.data import random_split
+from monai.data import CacheDataset, DataLoader
 from monai.transforms import (
     Compose,
-    LoadImaged,
     EnsureChannelFirstd,
-    ScaleIntensityd,
-    Resized,
+    LoadImaged,
+    Orientationd,
     RandAffined,
     RandFlipd,
-    RandGaussianNoised,
+    Resized,
+    ScaleIntensityd,
+    Spacingd,
 )
-from monai.data import Dataset, DataLoader
-from src.helpers import log_system_message
 
 
-def build_data_transformations(
-    is_training_phase_flag: bool, target_spatial_resolution: Tuple[int, int] = (256, 256)
-) -> Compose:
-    base_transformations_list = [
-        LoadImaged(keys=["image_data", "segmentation_mask_data"]),
-        EnsureChannelFirstd(keys=["image_data", "segmentation_mask_data"]),
-        ScaleIntensityd(keys=["image_data", "segmentation_mask_data"]),
-        Resized(keys=["image_data", "segmentation_mask_data"], spatial_size=target_spatial_resolution),
+def build_transforms(is_train, target_height, target_width):
+    base_transforms = [
+        LoadImaged(keys=["image", "mask"]),
+        EnsureChannelFirstd(keys=["image", "mask"]),
+        Orientationd(keys=["image", "mask"], axcodes="RAS"),
+        Spacingd(keys=["image", "mask"], pixdim=(1.0, 1.0), mode=("bilinear", "nearest")),
+        ScaleIntensityd(keys=["image", "mask"]),
+        Resized(keys=["image", "mask"], spatial_size=(target_height, target_width)),
     ]
 
-    augmentation_transformations_list = (
+    augmentation_transforms = (
         [
-            RandFlipd(keys=["image_data", "segmentation_mask_data"], spatial_axis=0, prob=0.5),
-            RandFlipd(keys=["image_data", "segmentation_mask_data"], spatial_axis=1, prob=0.5),
-            RandAffined(keys=["image_data", "segmentation_mask_data"], rotate_range=0.3, scale_range=0.1, prob=0.5),
-            RandGaussianNoised(keys=["image_data"], prob=0.2),
+            RandFlipd(keys=["image", "mask"], spatial_axis=0, prob=0.5),
+            RandFlipd(keys=["image", "mask"], spatial_axis=1, prob=0.5),
+            RandAffined(keys=["image", "mask"], rotate_range=0.3, scale_range=0.1, prob=0.5),
         ]
-        if is_training_phase_flag
+        if is_train
         else []
     )
 
-    return Compose(base_transformations_list + augmentation_transformations_list)
+    return Compose(base_transforms + augmentation_transforms)
 
 
-def discover_dataset_filepaths(dataset_root_directory: str) -> List[Dict[str, str]]:
-    image_filepaths_list = sorted(glob.glob(os.path.join(dataset_root_directory, "images", "*.*")))
-    mask_filepaths_list = sorted(glob.glob(os.path.join(dataset_root_directory, "masks", "*.*")))
-
-    if len(image_filepaths_list) != len(mask_filepaths_list) or len(image_filepaths_list) == 0:
-        log_system_message("error", "Dataset image and mask counts are mismatched or empty.")
-        raise RuntimeError("Dataset inconsistency detected.")
-
-    return [
-        {"image_data": image_path, "segmentation_mask_data": mask_path}
-        for image_path, mask_path in zip(image_filepaths_list, mask_filepaths_list)
-    ]
+def get_data_dicts(data_dir):
+    image_paths = sorted(glob.glob(os.path.join(data_dir, "images", "*.*")))
+    mask_paths = sorted(glob.glob(os.path.join(data_dir, "masks", "*.*")))
+    return [{"image": img, "mask": msk} for img, msk in zip(image_paths, mask_paths)]
 
 
-def construct_dataloaders(hyperparameter_dictionary: Dict[str, any]) -> Tuple[DataLoader, DataLoader, DataLoader]:
-    dataset_dictionary_list = discover_dataset_filepaths(hyperparameter_dictionary.get("dataset_directory", "dataset"))
+def build_dataloaders(config):
+    data_dicts = get_data_dicts(config.get("dataset_directory", "dataset"))
 
-    total_samples_count = len(dataset_dictionary_list)
-    training_samples_count = int(total_samples_count * 0.70)
-    validation_samples_count = int(total_samples_count * 0.15)
-    testing_samples_count = total_samples_count - training_samples_count - validation_samples_count
+    total_samples = len(data_dicts)
+    train_size = int(total_samples * 0.70)
+    val_size = int(total_samples * 0.15)
+    test_size = total_samples - train_size - val_size
 
-    training_subset, validation_subset, testing_subset = random_split(
-        dataset_dictionary_list,
-        [training_samples_count, validation_samples_count, testing_samples_count],
-        generator=torch.Generator().manual_seed(hyperparameter_dictionary.get("random_seed_value", 42)),
+    generator = torch.Generator().manual_seed(config.get("random_seed", 42))
+    train_subset, val_subset, test_subset = torch.utils.data.random_split(
+        data_dicts, [train_size, val_size, test_size], generator=generator
     )
 
-    target_resolution_tuple = (
-        hyperparameter_dictionary.get("image_height", 256),
-        hyperparameter_dictionary.get("image_width", 256),
+    target_h = config.get("image_height", 352)
+    target_w = config.get("image_width", 352)
+
+    train_ds = CacheDataset(
+        data=list(train_subset), transform=build_transforms(True, target_h, target_w), cache_rate=1.0, num_workers=4
+    )
+    val_ds = CacheDataset(
+        data=list(val_subset), transform=build_transforms(False, target_h, target_w), cache_rate=1.0, num_workers=4
+    )
+    test_ds = CacheDataset(
+        data=list(test_subset), transform=build_transforms(False, target_h, target_w), cache_rate=1.0, num_workers=4
     )
 
-    training_dataset_instance = Dataset(
-        data=list(training_subset), transform=build_data_transformations(True, target_resolution_tuple)
-    )
-    validation_dataset_instance = Dataset(
-        data=list(validation_subset), transform=build_data_transformations(False, target_resolution_tuple)
-    )
-    testing_dataset_instance = Dataset(
-        data=list(testing_subset), transform=build_data_transformations(False, target_resolution_tuple)
-    )
+    batch_size = config.get("batch_size", 8)
+    num_workers = config.get("num_workers", 16)
+    pin_memory = torch.cuda.is_available()
 
-    batch_size_integer = hyperparameter_dictionary.get("batch_size", 8)
-    number_of_workers_integer = hyperparameter_dictionary.get("number_of_workers", 4)
-    pin_memory_boolean = torch.cuda.is_available()
-
-    training_dataloader_instance = DataLoader(
-        training_dataset_instance,
-        batch_size=batch_size_integer,
+    train_loader = DataLoader(
+        train_ds,
+        batch_size=batch_size,
         shuffle=True,
-        num_workers=number_of_workers_integer,
-        pin_memory=pin_memory_boolean,
+        num_workers=num_workers - 8,
+        pin_memory=pin_memory,
         persistent_workers=True,
-        prefetch_factor=4,
     )
-    validation_dataloader_instance = DataLoader(
-        validation_dataset_instance,
-        batch_size=batch_size_integer,
+    val_loader = DataLoader(
+        val_ds,
+        batch_size=batch_size,
         shuffle=False,
-        num_workers=number_of_workers_integer,
-        pin_memory=pin_memory_boolean,
+        num_workers=num_workers - 12,
+        pin_memory=pin_memory,
         persistent_workers=True,
-        prefetch_factor=4,
     )
-    testing_dataloader_instance = DataLoader(
-        testing_dataset_instance,
-        batch_size=batch_size_integer,
+    test_loader = DataLoader(
+        test_ds,
+        batch_size=batch_size,
         shuffle=False,
-        num_workers=number_of_workers_integer,
-        pin_memory=pin_memory_boolean,
+        num_workers=num_workers - 12,
+        pin_memory=pin_memory,
         persistent_workers=True,
-        prefetch_factor=4,
     )
 
-    return training_dataloader_instance, validation_dataloader_instance, testing_dataloader_instance
+    return train_loader, val_loader, test_loader
