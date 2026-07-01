@@ -1,4 +1,4 @@
-# Endoscopy Polyp Segmentation (Pure PyTorch + MONAI)
+# Endoscopy Polyp Segmentation
 
 ![PyTorch](https://img.shields.io/badge/PyTorch-%23EE4C2C.svg?style=for-the-badge&logo=PyTorch&logoColor=white) ![MONAI](https://img.shields.io/badge/MONAI-%23000000.svg?style=for-the-badge&logo=MONAI&logoColor=white)
 
@@ -20,7 +20,7 @@ Combined robust feature extraction against highly imbalanced endoscopy datasets 
 ## Getting Started
 
 ```bash
-git clone <repository_url>
+git clone https://github.com/abderrahmenex86/Polyp-Segmentation
 pip install torch torchvision torchaudio monai tqdm matplotlib
 ```
 
