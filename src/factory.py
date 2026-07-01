@@ -2,7 +2,7 @@ import torch
 from monai.networks.nets import UNETR, UNet, ViT
 
 from src.helpers import log_message
-from src.models import MedSAMWrapper, PraNet
+from src.models import PraNet
 
 
 def build_model(config):
@@ -31,8 +31,6 @@ def build_model(config):
         )
     elif architecture == "pranet":
         return PraNet(backbone_weights=config.get("backbone_weights"), pranet_weights=config.get("pranet_weights"))
-    elif architecture == "medsam":
-        return MedSAMWrapper(checkpoint_path=config.get("medsam_checkpoint"))
     else:
         log_message("error", f"Architecture {architecture} not recognized.")
         raise ValueError("Invalid architecture.")

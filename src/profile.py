@@ -23,17 +23,11 @@ def profile_hardware_limits(config):
     model_initial = build_model(config).to(device)
     dummy_input_initial = torch.randn(1, in_channels, image_h, image_w, device=device)
 
-    if hasattr(model_initial, "sam"):
-        dummy_mask_initial = torch.randint(0, 2, (1, 1, image_h, image_w), device=device, dtype=torch.float32)
-        model_stats = torchinfo.summary(model_initial, input_data=(dummy_input_initial, dummy_mask_initial), verbose=0)
-    else:
-        model_stats = torchinfo.summary(model_initial, input_data=dummy_input_initial, verbose=0)
+    model_stats = torchinfo.summary(model_initial, input_data=dummy_input_initial, verbose=0)
 
     log_message("profile", f"Model Architecture Summary:\n{str(model_stats)}")
 
     del model_initial, dummy_input_initial
-    if "dummy_mask_initial" in locals():
-        del dummy_mask_initial
     torch.cuda.empty_cache()
     gc.collect()
 
@@ -53,7 +47,7 @@ def profile_hardware_limits(config):
 
             optimizer.zero_grad()
             with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
-                logits = model(dummy_images, dummy_masks) if hasattr(model, "sam") else model(dummy_images)
+                logits = model(dummy_images)
                 loss = loss_fn(logits, dummy_masks)
 
             loss.backward()

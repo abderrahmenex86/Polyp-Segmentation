@@ -39,7 +39,6 @@ def parse_args():
     parser.add_argument("--out_classes", type=int, default=1)
     parser.add_argument("--random_seed", type=int, default=42)
 
-    parser.add_argument("--medsam_checkpoint", type=str, default=None)
     parser.add_argument("--pranet_weights", type=str, default=None)
     parser.add_argument("--backbone_weights", type=str, default=None)
 

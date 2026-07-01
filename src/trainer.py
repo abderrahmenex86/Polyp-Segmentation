@@ -26,7 +26,7 @@ def eval_epoch(model, dataloader, device):
             images = batch["image"].to(device)
             masks = batch["mask"].to(device)
 
-            logits = model(images, masks) if hasattr(model, "sam") else model(images)
+            logits = model(images)
             preds = (torch.sigmoid(logits) > 0.5).float()
 
             dice_metric(y_pred=preds, y=masks)
@@ -56,13 +56,7 @@ def train_model(config):
     dummy_input = torch.randn(1, config.get("in_channels"), config.get("image_height"), config.get("image_width")).to(
         device
     )
-    if hasattr(model, "sam"):
-        dummy_mask = (
-            torch.randint(0, 2, (1, 1, config.get("image_height"), config.get("image_width"))).float().to(device)
-        )
-        model_stats = torchinfo.summary(model, input_data=(dummy_input, dummy_mask), verbose=0)
-    else:
-        model_stats = torchinfo.summary(model, input_data=dummy_input, verbose=0)
+    model_stats = torchinfo.summary(model, input_data=dummy_input, verbose=0)
 
     with open(os.path.join(run_dir, "architecture.txt"), "w") as file_handle:
         file_handle.write(str(model_stats))
@@ -87,7 +81,7 @@ def train_model(config):
             optimizer.zero_grad()
 
             with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
-                logits = model(images, masks) if hasattr(model, "sam") else model(images)
+                logits = model(images)
                 loss = loss_fn(logits, masks)
 
             loss.backward()

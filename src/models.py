@@ -214,50 +214,6 @@ class PraNet(nn.Module):
         return self.upsample4(ra2_pred)
 
 
-class MedSAMWrapper(nn.Module):
-    def __init__(self, checkpoint_path=None):
-        super().__init__()
-        from segment_anything import sam_model_registry
-
-        self.sam = sam_model_registry["vit_b"](checkpoint=checkpoint_path)
-
-    def forward(self, images, masks=None):
-        image_embeddings = self.sam.image_encoder(images)
-
-        batch_size = images.shape[0]
-        device = images.device
-
-        if masks is not None:
-            boxes = []
-            for m in masks:
-                nonzero = torch.nonzero(m[0])
-                if len(nonzero) > 0:
-                    y_min, x_min = nonzero.min(dim=0)[0]
-                    y_max, x_max = nonzero.max(dim=0)[0]
-                    boxes.append([x_min.item(), y_min.item(), x_max.item(), y_max.item()])
-                else:
-                    boxes.append([0, 0, images.shape[3], images.shape[2]])
-            boxes_tensor = torch.tensor(boxes, device=device).unsqueeze(1)
-        else:
-            boxes_tensor = torch.tensor(
-                [[0, 0, images.shape[3], images.shape[2]] for _ in range(batch_size)], device=device
-            ).unsqueeze(1)
-
-        sparse_embeddings, dense_embeddings = self.sam.prompt_encoder(points=None, boxes=boxes_tensor, masks=None)
-
-        low_res_masks, _ = self.sam.mask_decoder(
-            image_embeddings=image_embeddings,
-            image_pe=self.sam.prompt_encoder.get_dense_pe(),
-            sparse_prompt_embeddings=sparse_embeddings,
-            dense_prompt_embeddings=dense_embeddings,
-            multimask_output=False,
-        )
-
-        return F.interpolate(
-            low_res_masks, size=(images.shape[2], images.shape[3]), mode="bilinear", align_corners=False
-        )
-
-
 def build_loss():
     return DiceCELoss(
         include_background=False, sigmoid=True, jaccard=False, reduction="mean", weight=torch.tensor([1.0])
