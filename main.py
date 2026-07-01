@@ -1,62 +1,59 @@
 import argparse
-from typing import Dict, Any
-from src.trainer import execute_training_lifecycle
-from src.tester import execute_evaluation_lifecycle
-from src.infer import execute_smart_inference
-from src.dataset import construct_dataloaders
-from src.factory import instantiate_model_architecture
-from src.helpers import load_dictionary_from_json
-import torch
 import os
 
+import torch
 
-def parse_dynamic_arguments() -> Dict[str, Any]:
-    argument_parser_instance = argparse.ArgumentParser(description="Ex86 Pure-PyTorch Endoscopy Polyp Segmentation")
-    argument_parser_instance.add_argument("--train", action="store_true")
-    argument_parser_instance.add_argument("--test", action="store_true")
-    argument_parser_instance.add_argument("--infer", action="store_true")
+from src.dataset import build_dataloaders
+from src.factory import build_model
+from src.helpers import load_json
+from src.infer import infer_run
+from src.trainer import eval_epoch, train_model
 
-    known_arguments_namespace, unknown_arguments_list = argument_parser_instance.parse_known_args()
 
-    hyperparameter_dictionary = vars(known_arguments_namespace)
+def parse_args():
+    parser = argparse.ArgumentParser(description="Ex86 Endoscopy Architecture")
+    parser.add_argument("--train", action="store_true")
+    parser.add_argument("--test", action="store_true")
+    parser.add_argument("--infer", action="store_true")
 
-    for index_integer in range(0, len(unknown_arguments_list), 2):
-        key_string = unknown_arguments_list[index_integer].lstrip("--")
-        value_string = unknown_arguments_list[index_integer + 1]
-        if value_string.isdigit():
-            hyperparameter_dictionary[key_string] = int(value_string)
-        elif value_string.replace(".", "", 1).isdigit():
-            hyperparameter_dictionary[key_string] = float(value_string)
-        elif value_string.lower() in ["true", "false"]:
-            hyperparameter_dictionary[key_string] = value_string.lower() == "true"
+    known_args, unknown_args = parser.parse_known_args()
+    config = vars(known_args)
+
+    for i in range(0, len(unknown_args), 2):
+        key = unknown_args[i].lstrip("--")
+        val = unknown_args[i + 1]
+        if val.isdigit():
+            config[key] = int(val)
+        elif val.replace(".", "", 1).isdigit():
+            config[key] = float(val)
+        elif val.lower() in ["true", "false"]:
+            config[key] = val.lower() == "true"
         else:
-            hyperparameter_dictionary[key_string] = value_string
+            config[key] = val
 
-    return hyperparameter_dictionary
+    return config
 
 
-def execute_main_application_entrypoint() -> None:
-    hyperparameter_dictionary = parse_dynamic_arguments()
+def main():
+    config = parse_args()
 
-    if hyperparameter_dictionary.get("train", False):
-        execute_training_lifecycle(hyperparameter_dictionary)
+    if config.get("train", False):
+        train_model(config)
 
-    if hyperparameter_dictionary.get("test", False):
-        artifact_target_path = hyperparameter_dictionary.get("artifact_directory", None)
-        if artifact_target_path and os.path.exists(os.path.join(artifact_target_path, "hyperparameters.json")):
-            hyperparameter_dictionary.update(
-                load_dictionary_from_json(os.path.join(artifact_target_path, "hyperparameters.json"))
-            )
-            _, _, testing_dataloader_instance = construct_dataloaders(hyperparameter_dictionary)
-            model_instance = instantiate_model_architecture(hyperparameter_dictionary)
-            model_instance.load_state_dict(torch.load(os.path.join(artifact_target_path, "best_model.pth")))
-            execute_evaluation_lifecycle(model_instance, testing_dataloader_instance)
+    if config.get("test", False):
+        run_dir = config.get("run_dir")
+        if run_dir and os.path.exists(os.path.join(run_dir, "hyperparameters.json")):
+            config.update(load_json(os.path.join(run_dir, "hyperparameters.json")))
+            _, _, test_loader = build_dataloaders(config)
 
-    if hyperparameter_dictionary.get("infer", False):
-        inference_directory_path = hyperparameter_dictionary.get("inference_directory", "dataset/inference")
-        target_artifact_directory_path = hyperparameter_dictionary.get("artifact_directory", None)
-        execute_smart_inference(inference_directory_path, target_artifact_directory_path)
+            device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+            model = build_model(config).to(device)
+            model.load_state_dict(torch.load(os.path.join(run_dir, "best_model.pth"), map_location=device))
+            eval_epoch(model, test_loader, device)
+
+    if config.get("infer", False):
+        infer_run(config.get("inference_dir", "dataset/inference"), config.get("run_dir"))
 
 
 if __name__ == "__main__":
-    execute_main_application_entrypoint()
+    main()
