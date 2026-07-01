@@ -1,99 +1,113 @@
 import os
+
 import torch
-from typing import Dict, Any
+from monai.metrics import DiceMetric, MeanIoU
 from tqdm import tqdm
+
+from src.dataset import build_dataloaders
+from src.factory import build_model, build_optimizer, build_scheduler
 from src.helpers import (
-    determine_optimal_device,
-    generate_artifact_directory_path,
-    save_dictionary_to_json,
-    log_system_message,
+    generate_run_dir,
+    log_message,
+    plot_pre_training_batch,
+    save_json,
 )
-from src.dataset import construct_dataloaders
-from src.factory import (
-    instantiate_model_architecture,
-    instantiate_optimizer_algorithm,
-    instantiate_learning_rate_scheduler,
-)
-from src.models import build_combined_loss_function
-from src.tester import execute_evaluation_lifecycle
+from src.models import build_loss
 
 
-def execute_training_lifecycle(hyperparameter_dictionary: Dict[str, Any]) -> None:
-    execution_device = determine_optimal_device()
-    artifact_directory_path = generate_artifact_directory_path(
-        hyperparameter_dictionary.get("architecture_name", "UNet")
-    )
+def eval_epoch(model, dataloader, device):
+    model.eval()
+    dice_metric = DiceMetric(include_background=False, reduction="mean")
+    iou_metric = MeanIoU(include_background=False, reduction="mean")
 
-    save_dictionary_to_json(hyperparameter_dictionary, os.path.join(artifact_directory_path, "hyperparameters.json"))
+    with torch.no_grad():
+        for batch in tqdm(dataloader, desc="Evaluating", leave=False):
+            images = batch["image"].to(device)
+            masks = batch["mask"].to(device)
 
-    training_dataloader, validation_dataloader, _ = construct_dataloaders(hyperparameter_dictionary)
+            logits = model(images, masks) if hasattr(model, "sam") else model(images)
+            preds = (torch.sigmoid(logits) > 0.5).float()
 
-    model_instance = instantiate_model_architecture(hyperparameter_dictionary).to(execution_device)
-    optimizer_instance = instantiate_optimizer_algorithm(model_instance, hyperparameter_dictionary)
-    scheduler_instance = instantiate_learning_rate_scheduler(optimizer_instance, hyperparameter_dictionary)
-    loss_criterion_function = build_combined_loss_function()
+            dice_metric(y_pred=preds, y=masks)
+            iou_metric(y_pred=preds, y=masks)
 
-    with open(os.path.join(artifact_directory_path, "architecture.txt"), "w") as architecture_file_handle:
-        architecture_file_handle.write(str(model_instance))
+    dice = dice_metric.aggregate().item()
+    iou = iou_metric.aggregate().item()
+    dice_metric.reset()
+    iou_metric.reset()
 
-    maximum_epochs_integer = hyperparameter_dictionary.get("maximum_epochs", 100)
-    early_stopping_patience_integer = hyperparameter_dictionary.get("early_stopping_patience", 15)
-    gradient_clipping_threshold_float = hyperparameter_dictionary.get("gradient_clipping_threshold", 1.0)
+    return dice, iou
 
-    best_validation_dice_score_float = 0.0
-    epochs_without_improvement_integer = 0
-    training_history_dictionary = {"training_loss": [], "validation_dice": [], "validation_iou": []}
 
-    for current_epoch_integer in range(1, maximum_epochs_integer + 1):
-        model_instance.train()
-        accumulated_training_loss_float = 0.0
+def train_model(config):
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    run_dir = generate_run_dir(config.get("architecture", "UNet"))
+    save_json(config, os.path.join(run_dir, "hyperparameters.json"))
 
-        progress_bar_instance = tqdm(
-            training_dataloader, desc=f"Epoch {current_epoch_integer}/{maximum_epochs_integer}", leave=False
-        )
-        for batch_dictionary in progress_bar_instance:
-            input_image_tensor = batch_dictionary["image_data"].to(execution_device)
-            ground_truth_mask_tensor = batch_dictionary["segmentation_mask_data"].to(execution_device)
+    train_loader, val_loader, _ = build_dataloaders(config)
+    plot_pre_training_batch(train_loader, os.path.join("docs", "figs", f"pre_train_{os.path.basename(run_dir)}.png"))
 
-            optimizer_instance.zero_grad()
-            prediction_logits_tensor = model_instance(input_image_tensor)
+    model = build_model(config).to(device)
+    optimizer = build_optimizer(model, config)
+    scheduler = build_scheduler(optimizer, config)
+    loss_fn = build_loss()
 
-            batch_loss_tensor = loss_criterion_function(prediction_logits_tensor, ground_truth_mask_tensor)
-            batch_loss_tensor.backward()
+    with open(os.path.join(run_dir, "architecture.txt"), "w") as file_handle:
+        file_handle.write(str(model))
 
-            torch.nn.utils.clip_grad_norm_(model_instance.parameters(), gradient_clipping_threshold_float)
-            optimizer_instance.step()
+    epochs = config.get("epochs", 100)
+    patience = config.get("patience", 15)
+    clip_thresh = config.get("clip_threshold", 1.0)
 
-            accumulated_training_loss_float += batch_loss_tensor.item()
-            progress_bar_instance.set_postfix({"loss": f"{batch_loss_tensor.item():.4f}"})
+    best_dice = 0.0
+    stagnant_epochs = 0
+    history = {"train_loss": [], "val_dice": [], "val_iou": []}
 
-        scheduler_instance.step()
-        average_epoch_loss_float = accumulated_training_loss_float / len(training_dataloader)
+    for epoch in range(1, epochs + 1):
+        model.train()
+        epoch_loss = 0.0
 
-        validation_dice_score_float, validation_iou_score_float = execute_evaluation_lifecycle(
-            model_instance, validation_dataloader
-        )
+        progress = tqdm(train_loader, desc=f"Epoch {epoch}/{epochs}", leave=False)
+        for batch in progress:
+            images = batch["image"].to(device)
+            masks = batch["mask"].to(device)
 
-        training_history_dictionary["training_loss"].append(average_epoch_loss_float)
-        training_history_dictionary["validation_dice"].append(validation_dice_score_float)
-        training_history_dictionary["validation_iou"].append(validation_iou_score_float)
-        save_dictionary_to_json(
-            training_history_dictionary, os.path.join(artifact_directory_path, "model_history.json")
-        )
+            optimizer.zero_grad()
 
-        log_system_message(
+            with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
+                logits = model(images, masks) if hasattr(model, "sam") else model(images)
+                loss = loss_fn(logits, masks)
+
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), clip_thresh)
+            optimizer.step()
+
+            epoch_loss += loss.item()
+            progress.set_postfix({"loss": f"{loss.item():.4f}"})
+
+        scheduler.step()
+        avg_loss = epoch_loss / len(train_loader)
+
+        val_dice, val_iou = eval_epoch(model, val_loader, device)
+
+        history["train_loss"].append(avg_loss)
+        history["val_dice"].append(val_dice)
+        history["val_iou"].append(val_iou)
+        save_json(history, os.path.join(run_dir, "model_history.json"))
+
+        log_message(
             "train",
-            f"Epoch {current_epoch_integer} | Loss: {average_epoch_loss_float:.4f} | Val DSC: {validation_dice_score_float:.4f}",
+            f"Epoch {epoch} | Loss: {avg_loss:.4f} | Val DSC: {val_dice:.4f} | LR: {scheduler.get_last_lr()[0]:.2e}",
         )
 
-        if validation_dice_score_float > best_validation_dice_score_float:
-            best_validation_dice_score_float = validation_dice_score_float
-            epochs_without_improvement_integer = 0
-            torch.save(model_instance.state_dict(), os.path.join(artifact_directory_path, "best_model.pth"))
-            log_system_message("save", "New best model serialized to disk.")
+        if val_dice > best_dice:
+            best_dice = val_dice
+            stagnant_epochs = 0
+            torch.save(model.state_dict(), os.path.join(run_dir, "best_model.pth"))
+            log_message("save", f"New best DSC: {best_dice:.4f} serialized.")
         else:
-            epochs_without_improvement_integer += 1
+            stagnant_epochs += 1
 
-        if epochs_without_improvement_integer >= early_stopping_patience_integer:
-            log_system_message("stop", f"Early stopping triggered at epoch {current_epoch_integer}.")
+        if stagnant_epochs >= patience:
+            log_message("stop", f"Early stopping triggered at epoch {epoch}.")
             break
