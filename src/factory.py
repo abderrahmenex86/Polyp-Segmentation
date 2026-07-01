@@ -1,66 +1,51 @@
 import torch
-import torch.nn as nn
-from typing import Dict, Any
-from monai.networks.nets import UNet, UNETR, ViT
-from src.models import CustomPolypSegmentationArchitecture, PraNetStubArchitecture, MedSAMStubArchitecture
-from src.helpers import log_system_message
+from monai.networks.nets import UNETR, UNet, ViT
+
+from src.helpers import log_message
+from src.models import PraNet
 
 
-def instantiate_model_architecture(hyperparameter_dictionary: Dict[str, Any]) -> nn.Module:
-    architecture_name_string = hyperparameter_dictionary.get("architecture_name", "UNet").lower()
-    input_channels_integer = hyperparameter_dictionary.get("input_channels", 3)
-    output_classes_integer = hyperparameter_dictionary.get("output_classes", 1)
-    image_resolution_tuple = (
-        hyperparameter_dictionary.get("image_height", 256),
-        hyperparameter_dictionary.get("image_width", 256),
-    )
+def build_model(config):
+    architecture = config.get("architecture", "UNet").lower()
+    in_channels = config.get("in_channels", 3)
+    out_classes = config.get("out_classes", 1)
+    resolution = (config.get("image_height", 352), config.get("image_width", 352))
 
-    if architecture_name_string == "unet":
-        model_instance = UNet(
+    if architecture == "unet":
+        return UNet(
             spatial_dims=2,
-            in_channels=input_channels_integer,
-            out_channels=output_classes_integer,
+            in_channels=in_channels,
+            out_channels=out_classes,
             channels=(16, 32, 64, 128, 256),
             strides=(2, 2, 2, 2),
         )
-    elif architecture_name_string == "unetr":
-        model_instance = UNETR(
-            in_channels=input_channels_integer,
-            out_channels=output_classes_integer,
-            img_size=image_resolution_tuple,
-            spatial_dims=2,
-        )
-    elif architecture_name_string == "vit":
-        model_instance = ViT(
-            in_channels=input_channels_integer,
-            img_size=image_resolution_tuple,
+    elif architecture == "unetr":
+        return UNETR(in_channels=in_channels, out_channels=out_classes, img_size=resolution, spatial_dims=2)
+    elif architecture == "vit":
+        return ViT(
+            in_channels=in_channels,
+            img_size=resolution,
             patch_size=(16, 16),
             classification=False,
             post_activation="Sigmoid",
         )
-    elif architecture_name_string == "pranet":
-        model_instance = PraNetStubArchitecture(input_channels_integer, output_classes_integer)
-    elif architecture_name_string == "medsam":
-        model_instance = MedSAMStubArchitecture(input_channels_integer, output_classes_integer, image_resolution_tuple)
-    elif architecture_name_string == "custom":
-        model_instance = CustomPolypSegmentationArchitecture(input_channels_integer, output_classes_integer)
+    elif architecture == "pranet":
+        return PraNet()
     else:
-        log_system_message("error", f"Unknown architecture requested: {architecture_name_string}")
+        log_message("error", f"Architecture {architecture} not recognized.")
         raise ValueError("Invalid architecture.")
 
-    return model_instance
+
+def build_optimizer(model, config):
+    lr = float(config.get("learning_rate", 1e-4))
+    weight_decay = float(config.get("weight_decay", 1e-5))
+    return torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
 
 
-def instantiate_optimizer_algorithm(
-    model_instance: nn.Module, hyperparameter_dictionary: Dict[str, Any]
-) -> torch.optim.Optimizer:
-    learning_rate_float = float(hyperparameter_dictionary.get("learning_rate", 1e-4))
-    weight_decay_float = float(hyperparameter_dictionary.get("weight_decay", 1e-5))
-    return torch.optim.AdamW(model_instance.parameters(), lr=learning_rate_float, weight_decay=weight_decay_float)
+def build_scheduler(optimizer, config):
+    total_epochs = int(config.get("epochs", 100))
+    warmup_epochs = int(config.get("warmup_epochs", 10))
 
-
-def instantiate_learning_rate_scheduler(
-    optimizer_instance: torch.optim.Optimizer, hyperparameter_dictionary: Dict[str, Any]
-) -> torch.optim.lr_scheduler.LRScheduler:
-    maximum_epochs_integer = int(hyperparameter_dictionary.get("maximum_epochs", 100))
-    return torch.optim.lr_scheduler.CosineAnnealingLR(optimizer_instance, T_max=maximum_epochs_integer, eta_min=1e-7)
+    warmup = torch.optim.lr_scheduler.LinearLR(optimizer, start_factor=0.1, total_iters=warmup_epochs)
+    cosine = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=total_epochs - warmup_epochs, eta_min=1e-7)
+    return torch.optim.lr_scheduler.SequentialLR(optimizer, schedulers=[warmup, cosine], milestones=[warmup_epochs])
