@@ -1,6 +1,7 @@
 import os
 
 import torch
+import torchinfo
 from monai.metrics import DiceMetric, MeanIoU
 from tqdm import tqdm
 
@@ -41,7 +42,7 @@ def eval_epoch(model, dataloader, device):
 
 def train_model(config):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    run_dir = generate_run_dir(config.get("architecture", "UNet"))
+    run_dir = generate_run_dir(config.get("architecture"))
     save_json(config, os.path.join(run_dir, "hyperparameters.json"))
 
     train_loader, val_loader, _ = build_dataloaders(config)
@@ -52,12 +53,23 @@ def train_model(config):
     scheduler = build_scheduler(optimizer, config)
     loss_fn = build_loss()
 
-    with open(os.path.join(run_dir, "architecture.txt"), "w") as file_handle:
-        file_handle.write(str(model))
+    dummy_input = torch.randn(1, config.get("in_channels"), config.get("image_height"), config.get("image_width")).to(
+        device
+    )
+    if hasattr(model, "sam"):
+        dummy_mask = (
+            torch.randint(0, 2, (1, 1, config.get("image_height"), config.get("image_width"))).float().to(device)
+        )
+        model_stats = torchinfo.summary(model, input_data=(dummy_input, dummy_mask), verbose=0)
+    else:
+        model_stats = torchinfo.summary(model, input_data=dummy_input, verbose=0)
 
-    epochs = config.get("epochs", 100)
-    patience = config.get("patience", 15)
-    clip_thresh = config.get("clip_threshold", 1.0)
+    with open(os.path.join(run_dir, "architecture.txt"), "w") as file_handle:
+        file_handle.write(str(model_stats))
+
+    epochs = config.get("epochs")
+    patience = config.get("patience")
+    clip_thresh = config.get("clip_threshold")
 
     best_dice = 0.0
     stagnant_epochs = 0

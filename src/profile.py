@@ -1,8 +1,11 @@
-import torch
 import gc
+
+import torch
+import torchinfo
+
 from src.factory import build_model, build_optimizer
-from src.models import build_loss
 from src.helpers import log_message
+from src.models import build_loss
 
 
 def profile_hardware_limits(config):
@@ -13,11 +16,29 @@ def profile_hardware_limits(config):
 
     log_message("profile", "Initiating batch size limits profiling...")
 
-    current_batch_size = 2
-    max_safe_batch_size = 2
     image_h = config.get("image_height")
     image_w = config.get("image_width")
     in_channels = config.get("in_channels")
+
+    model_initial = build_model(config).to(device)
+    dummy_input_initial = torch.randn(1, in_channels, image_h, image_w, device=device)
+
+    if hasattr(model_initial, "sam"):
+        dummy_mask_initial = torch.randint(0, 2, (1, 1, image_h, image_w), device=device, dtype=torch.float32)
+        model_stats = torchinfo.summary(model_initial, input_data=(dummy_input_initial, dummy_mask_initial), verbose=0)
+    else:
+        model_stats = torchinfo.summary(model_initial, input_data=dummy_input_initial, verbose=0)
+
+    log_message("profile", f"Model Architecture Summary:\n{str(model_stats)}")
+
+    del model_initial, dummy_input_initial
+    if "dummy_mask_initial" in locals():
+        del dummy_mask_initial
+    torch.cuda.empty_cache()
+    gc.collect()
+
+    current_batch_size = 2
+    max_safe_batch_size = 2
 
     while True:
         try:
