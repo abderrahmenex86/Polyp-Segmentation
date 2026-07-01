@@ -4,7 +4,7 @@
 
 ## Performance Diagnostics
 
-*(Run `python tools.py --mode plot --path artifacts/YOUR_RUN` to populate loss curves in `docs/figs/`)*
+*Still in the training phase*
 
 ## Core Features
 
