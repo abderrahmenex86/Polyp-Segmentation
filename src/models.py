@@ -1,9 +1,105 @@
+import math
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import torchvision.models as models
 from monai.losses import DiceCELoss
 from monai.networks.nets import UNETR, UNet, ViT
+
+
+class Bottle2neck(nn.Module):
+    expansion = 4
+
+    def __init__(self, inplanes, planes, stride=1, downsample=None, baseWidth=26, scale=4, stype="normal"):
+        super().__init__()
+        width = int(math.floor(planes * (baseWidth / 64.0)))
+        self.conv1 = nn.Conv2d(inplanes, width * scale, kernel_size=1, bias=False)
+        self.bn1 = nn.BatchNorm2d(width * scale)
+
+        if scale == 1:
+            self.nums = 1
+        else:
+            self.nums = scale - 1
+        if stype == "stage":
+            self.pool = nn.AvgPool2d(kernel_size=3, stride=stride, padding=1)
+
+        convs = []
+        bns = []
+        for i in range(self.nums):
+            convs.append(nn.Conv2d(width, width, kernel_size=3, stride=stride, padding=1, bias=False))
+            bns.append(nn.BatchNorm2d(width))
+        self.convs = nn.ModuleList(convs)
+        self.bns = nn.ModuleList(bns)
+
+        self.conv3 = nn.Conv2d(width * scale, planes * self.expansion, kernel_size=1, bias=False)
+        self.bn3 = nn.BatchNorm2d(planes * self.expansion)
+        self.relu = nn.ReLU(inplace=True)
+        self.downsample = downsample
+        self.stype = stype
+        self.scale = scale
+        self.width = width
+
+    def forward(self, x):
+        residual = x
+        out = self.conv1(x)
+        out = self.bn1(out)
+        out = self.relu(out)
+
+        spx = torch.split(out, self.width, 1)
+        for i in range(self.nums):
+            if i == 0 or self.stype == "stage":
+                sp = spx[i]
+            else:
+                sp = sp + spx[i]
+            sp = self.convs[i](sp)
+            sp = self.relu(self.bns[i](sp))
+            if i == 0:
+                out = sp
+            else:
+                out = torch.cat((out, sp), 1)
+
+        if self.scale != 1 and self.stype == "normal":
+            out = torch.cat((out, spx[self.nums]), 1)
+        elif self.scale != 1 and self.stype == "stage":
+            out = torch.cat((out, self.pool(spx[self.nums])), 1)
+
+        out = self.conv3(out)
+        out = self.bn3(out)
+        if self.downsample is not None:
+            residual = self.downsample(x)
+        out += residual
+        return self.relu(out)
+
+
+class Res2Net(nn.Module):
+    def __init__(self, block, layers, baseWidth=26, scale=4):
+        super().__init__()
+        self.inplanes = 64
+        self.baseWidth = baseWidth
+        self.scale = scale
+        self.conv1 = nn.Conv2d(3, 64, kernel_size=7, stride=2, padding=3, bias=False)
+        self.bn1 = nn.BatchNorm2d(64)
+        self.relu = nn.ReLU(inplace=True)
+        self.maxpool = nn.MaxPool2d(kernel_size=3, stride=2, padding=1)
+        self.layer1 = self._make_layer(block, 64, layers[0])
+        self.layer2 = self._make_layer(block, 128, layers[1], stride=2)
+        self.layer3 = self._make_layer(block, 256, layers[2], stride=2)
+        self.layer4 = self._make_layer(block, 512, layers[3], stride=2)
+
+    def _make_layer(self, block, planes, blocks, stride=1):
+        downsample = None
+        if stride != 1 or self.inplanes != planes * block.expansion:
+            downsample = nn.Sequential(
+                nn.Conv2d(self.inplanes, planes * block.expansion, kernel_size=1, stride=stride, bias=False),
+                nn.BatchNorm2d(planes * block.expansion),
+            )
+        layers = [
+            block(self.inplanes, planes, stride, downsample, stype="stage", baseWidth=self.baseWidth, scale=self.scale)
+        ]
+        self.inplanes = planes * block.expansion
+        for i in range(1, blocks):
+            layers.append(block(self.inplanes, planes, baseWidth=self.baseWidth, scale=self.scale))
+        return nn.Sequential(*layers)
 
 
 class BasicConv(nn.Module):
@@ -71,14 +167,12 @@ class ReverseAttention(nn.Module):
 
 
 class PraNet(nn.Module):
-    def __init__(self):
+    def __init__(self, backbone_weights=None, pranet_weights=None):
         super().__init__()
-        resnet = models.resnet50(weights=models.ResNet50_Weights.IMAGENET1K_V1)
-        self.layer0 = nn.Sequential(resnet.conv1, resnet.bn1, resnet.relu, resnet.maxpool)
-        self.layer1 = resnet.layer1
-        self.layer2 = resnet.layer2
-        self.layer3 = resnet.layer3
-        self.layer4 = resnet.layer4
+        self.resnet = Res2Net(Bottle2neck, [3, 4, 6, 3], baseWidth=26, scale=4)
+
+        if backbone_weights and os.path.exists(backbone_weights):
+            self.resnet.load_state_dict(torch.load(backbone_weights))
 
         self.rfb2 = ReceptiveFieldBlock(512, 32)
         self.rfb3 = ReceptiveFieldBlock(1024, 32)
@@ -90,16 +184,19 @@ class PraNet(nn.Module):
 
         self.upsample2 = nn.Upsample(scale_factor=2, mode="bilinear", align_corners=True)
         self.upsample4 = nn.Upsample(scale_factor=4, mode="bilinear", align_corners=True)
-        self.upsample8 = nn.Upsample(scale_factor=8, mode="bilinear", align_corners=True)
 
         self.map_out = nn.Conv2d(32, 1, 1)
 
+        if pranet_weights and os.path.exists(pranet_weights):
+            self.load_state_dict(torch.load(pranet_weights))
+
     def forward(self, x):
-        l0 = self.layer0(x)
-        l1 = self.layer1(l0)
-        l2 = self.layer2(l1)
-        l3 = self.layer3(l2)
-        l4 = self.layer4(l3)
+        l0 = self.resnet.relu(self.resnet.bn1(self.resnet.conv1(x)))
+        l0_pool = self.resnet.maxpool(l0)
+        l1 = self.resnet.layer1(l0_pool)
+        l2 = self.resnet.layer2(l1)
+        l3 = self.resnet.layer3(l2)
+        l4 = self.resnet.layer4(l3)
 
         f2 = self.rfb2(l2)
         f3 = self.rfb3(l3)
@@ -115,6 +212,50 @@ class PraNet(nn.Module):
         ra2_pred = ra3_pred + self.upsample2(ra2_out)
 
         return self.upsample4(ra2_pred)
+
+
+class MedSAMWrapper(nn.Module):
+    def __init__(self, checkpoint_path=None):
+        super().__init__()
+        from segment_anything import sam_model_registry
+
+        self.sam = sam_model_registry["vit_b"](checkpoint=checkpoint_path)
+
+    def forward(self, images, masks=None):
+        image_embeddings = self.sam.image_encoder(images)
+
+        batch_size = images.shape[0]
+        device = images.device
+
+        if masks is not None:
+            boxes = []
+            for m in masks:
+                nonzero = torch.nonzero(m[0])
+                if len(nonzero) > 0:
+                    y_min, x_min = nonzero.min(dim=0)[0]
+                    y_max, x_max = nonzero.max(dim=0)[0]
+                    boxes.append([x_min.item(), y_min.item(), x_max.item(), y_max.item()])
+                else:
+                    boxes.append([0, 0, images.shape[3], images.shape[2]])
+            boxes_tensor = torch.tensor(boxes, device=device).unsqueeze(1)
+        else:
+            boxes_tensor = torch.tensor(
+                [[0, 0, images.shape[3], images.shape[2]] for _ in range(batch_size)], device=device
+            ).unsqueeze(1)
+
+        sparse_embeddings, dense_embeddings = self.sam.prompt_encoder(points=None, boxes=boxes_tensor, masks=None)
+
+        low_res_masks, _ = self.sam.mask_decoder(
+            image_embeddings=image_embeddings,
+            image_pe=self.sam.prompt_encoder.get_dense_pe(),
+            sparse_prompt_embeddings=sparse_embeddings,
+            dense_prompt_embeddings=dense_embeddings,
+            multimask_output=False,
+        )
+
+        return F.interpolate(
+            low_res_masks, size=(images.shape[2], images.shape[3]), mode="bilinear", align_corners=False
+        )
 
 
 def build_loss():
