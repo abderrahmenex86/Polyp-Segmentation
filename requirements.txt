@@ -1,0 +1,6 @@
+matplotlib
+monai
+numpy
+segment_anything
+torch
+tqdm
