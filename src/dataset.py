@@ -46,23 +46,23 @@ def get_data_dicts(data_dir):
 
 
 def build_dataloaders(config):
-    data_dicts = get_data_dicts(config.get("dataset_directory", "dataset"))
+    data_dicts = get_data_dicts(config.get("dataset_directory"))
 
     total_samples = len(data_dicts)
     train_size = int(total_samples * 0.70)
     val_size = int(total_samples * 0.15)
     test_size = total_samples - train_size - val_size
 
-    generator = torch.Generator().manual_seed(config.get("random_seed", 42))
+    generator = torch.Generator().manual_seed(config.get("random_seed"))
     train_subset, val_subset, test_subset = torch.utils.data.random_split(
         data_dicts, [train_size, val_size, test_size], generator=generator
     )
 
-    target_h = config.get("image_height", 352)
-    target_w = config.get("image_width", 352)
+    target_h = config.get("image_height")
+    target_w = config.get("image_width")
 
     train_ds = CacheDataset(
-        data=list(train_subset), transform=build_transforms(True, target_h, target_w), cache_rate=1.0, num_workers=4
+        data=list(train_subset), transform=build_transforms(True, target_h, target_w), cache_rate=1.0, num_workers=8
     )
     val_ds = CacheDataset(
         data=list(val_subset), transform=build_transforms(False, target_h, target_w), cache_rate=1.0, num_workers=4
@@ -71,33 +71,35 @@ def build_dataloaders(config):
         data=list(test_subset), transform=build_transforms(False, target_h, target_w), cache_rate=1.0, num_workers=4
     )
 
-    batch_size = config.get("batch_size", 8)
-    num_workers = config.get("num_workers", 16)
+    batch_size = config.get("batch_size")
     pin_memory = torch.cuda.is_available()
 
     train_loader = DataLoader(
         train_ds,
         batch_size=batch_size,
         shuffle=True,
-        num_workers=num_workers - 8,
+        num_workers=8,
         pin_memory=pin_memory,
         persistent_workers=True,
+        prefetch_factor=4,
     )
     val_loader = DataLoader(
         val_ds,
         batch_size=batch_size,
         shuffle=False,
-        num_workers=num_workers - 12,
+        num_workers=4,
         pin_memory=pin_memory,
         persistent_workers=True,
+        prefetch_factor=4,
     )
     test_loader = DataLoader(
         test_ds,
         batch_size=batch_size,
         shuffle=False,
-        num_workers=num_workers - 12,
+        num_workers=4,
         pin_memory=pin_memory,
         persistent_workers=True,
+        prefetch_factor=4,
     )
 
     return train_loader, val_loader, test_loader
