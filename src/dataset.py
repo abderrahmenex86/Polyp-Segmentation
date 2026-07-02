@@ -6,13 +6,12 @@ from monai.data import CacheDataset, DataLoader
 from monai.transforms import (
     Compose,
     EnsureChannelFirstd,
+    Lambdad,
     LoadImaged,
-    Orientationd,
     RandAffined,
     RandFlipd,
     Resized,
     ScaleIntensityd,
-    Spacingd,
 )
 
 
@@ -20,8 +19,7 @@ def build_transforms(is_train, target_height, target_width):
     base_transforms = [
         LoadImaged(keys=["image", "mask"]),
         EnsureChannelFirstd(keys=["image", "mask"]),
-        Orientationd(keys=["image", "mask"], axcodes="RAS"),
-        Spacingd(keys=["image", "mask"], pixdim=(1.0, 1.0), mode=("bilinear", "nearest")),
+        Lambdad(keys=["mask"], func=lambda x: x[0:1, ...]),
         ScaleIntensityd(keys=["image", "mask"]),
         Resized(keys=["image", "mask"], spatial_size=(target_height, target_width)),
     ]
@@ -62,13 +60,13 @@ def build_dataloaders(config):
     target_w = config.get("image_width")
 
     train_ds = CacheDataset(
-        data=list(train_subset), transform=build_transforms(True, target_h, target_w), cache_rate=1.0, num_workers=8
+        data=list(train_subset), transform=build_transforms(True, target_h, target_w), cache_rate=1.0, num_workers=4
     )
     val_ds = CacheDataset(
-        data=list(val_subset), transform=build_transforms(False, target_h, target_w), cache_rate=1.0, num_workers=4
+        data=list(val_subset), transform=build_transforms(False, target_h, target_w), cache_rate=1.0, num_workers=2
     )
     test_ds = CacheDataset(
-        data=list(test_subset), transform=build_transforms(False, target_h, target_w), cache_rate=1.0, num_workers=4
+        data=list(test_subset), transform=build_transforms(False, target_h, target_w), cache_rate=1.0, num_workers=2
     )
 
     batch_size = config.get("batch_size")
@@ -78,7 +76,7 @@ def build_dataloaders(config):
         train_ds,
         batch_size=batch_size,
         shuffle=True,
-        num_workers=8,
+        num_workers=4,
         pin_memory=pin_memory,
         persistent_workers=True,
         prefetch_factor=4,
@@ -87,7 +85,7 @@ def build_dataloaders(config):
         val_ds,
         batch_size=batch_size,
         shuffle=False,
-        num_workers=4,
+        num_workers=2,
         pin_memory=pin_memory,
         persistent_workers=True,
         prefetch_factor=4,
@@ -96,7 +94,7 @@ def build_dataloaders(config):
         test_ds,
         batch_size=batch_size,
         shuffle=False,
-        num_workers=4,
+        num_workers=2,
         pin_memory=pin_memory,
         persistent_workers=True,
         prefetch_factor=4,
