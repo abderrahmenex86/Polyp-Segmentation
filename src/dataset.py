@@ -17,7 +17,7 @@ from monai.transforms import (
 
 def build_transforms(is_train, target_height, target_width):
     base_transforms = [
-        LoadImaged(keys=["image", "mask"]),
+        LoadImaged(keys=["image", "mask"], reader="PILReader"),
         EnsureChannelFirstd(keys=["image", "mask"]),
         Lambdad(keys=["mask"], func=lambda x: x[0:1, ...]),
         ScaleIntensityd(keys=["image", "mask"]),
