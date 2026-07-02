@@ -1,5 +1,5 @@
 import torch
-from monai.networks.nets import UNETR, UNet, ViT
+from monai.networks.nets import UNETR, UNet
 
 from src.helpers import log_message
 from src.models import PraNet
@@ -21,15 +21,6 @@ def build_model(config):
         )
     elif architecture == "unetr":
         return UNETR(in_channels=in_channels, out_channels=out_classes, img_size=resolution, spatial_dims=2)
-    elif architecture == "vit":
-        return ViT(
-            in_channels=in_channels,
-            img_size=resolution,
-            patch_size=(16, 16),
-            classification=False,
-            post_activation="Sigmoid",
-            spatial_dims=2,
-        )
     elif architecture == "pranet":
         return PraNet(backbone_weights=config.get("backbone_weights"), pranet_weights=config.get("pranet_weights"))
     else:

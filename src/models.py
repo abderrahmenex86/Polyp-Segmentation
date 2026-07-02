@@ -4,7 +4,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from monai.losses import DiceCELoss
-from monai.networks.nets import UNETR, UNet, ViT
+from monai.networks.nets import UNETR, UNet
 
 
 class Bottle2neck(nn.Module):
