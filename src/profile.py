@@ -38,7 +38,7 @@ def profile_hardware_limits(config):
         try:
             model = build_model(config).to(device)
             optimizer = build_optimizer(model, config)
-            loss_fn = build_loss()
+            loss_fn = build_loss().to(device)
 
             dummy_images = torch.randn(current_batch_size, in_channels, image_h, image_w, device=device)
             dummy_masks = torch.randint(

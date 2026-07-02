@@ -51,7 +51,7 @@ def train_model(config):
     model = build_model(config).to(device)
     optimizer = build_optimizer(model, config)
     scheduler = build_scheduler(optimizer, config)
-    loss_fn = build_loss()
+    loss_fn = build_loss().to(device)
 
     dummy_input = torch.randn(1, config.get("in_channels"), config.get("image_height"), config.get("image_width")).to(
         device
