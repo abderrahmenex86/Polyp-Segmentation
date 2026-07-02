@@ -3,7 +3,7 @@ import os
 import torch
 import torchinfo
 from monai.metrics import DiceMetric, MeanIoU
-from tqdm import tqdm
+from tqdm.auto import tqdm
 
 from src.dataset import build_dataloaders
 from src.factory import build_model, build_optimizer, build_scheduler
@@ -49,6 +49,10 @@ def train_model(config):
     plot_pre_training_batch(train_loader, os.path.join("docs", "figs", f"pre_train_{os.path.basename(run_dir)}.png"))
 
     model = build_model(config).to(device)
+    if torch.cuda.device_count() > 1:
+        log_message("device", f"Activating multi-GPU training on {torch.cuda.device_count()} GPUs via DataParallel.")
+        model = torch.nn.DataParallel(model)
+
     optimizer = build_optimizer(model, config)
     scheduler = build_scheduler(optimizer, config)
     loss_fn = build_loss().to(device)
@@ -56,7 +60,9 @@ def train_model(config):
     dummy_input = torch.randn(1, config.get("in_channels"), config.get("image_height"), config.get("image_width")).to(
         device
     )
-    model_stats = torchinfo.summary(model, input_data=dummy_input, verbose=0)
+    model_stats = torchinfo.summary(
+        model.module if isinstance(model, torch.nn.DataParallel) else model, input_data=dummy_input, verbose=0
+    )
 
     with open(os.path.join(run_dir, "architecture.txt"), "w") as file_handle:
         file_handle.write(str(model_stats))
@@ -109,7 +115,10 @@ def train_model(config):
         if val_dice > best_dice:
             best_dice = val_dice
             stagnant_epochs = 0
-            torch.save(model.state_dict(), os.path.join(run_dir, "best_model.pth"))
+            torch.save(
+                model.module.state_dict() if isinstance(model, torch.nn.DataParallel) else model.state_dict(),
+                os.path.join(run_dir, "best_model.pth"),
+            )
             log_message("save", f"New best DSC: {best_dice:.4f} serialized.")
         else:
             stagnant_epochs += 1
