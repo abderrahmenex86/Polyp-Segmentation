@@ -9,26 +9,61 @@ import matplotlib.pyplot as plt
 from src.helpers import create_directory, load_json, log_message
 
 
-def execute_plot_generation(run_dir):
-    history_path = os.path.join(run_dir, "model_history.json")
-    if not os.path.exists(history_path):
-        raise FileNotFoundError("Model history artifact missing.")
+def execute_comparative_plot_generation():
+    run_directories = sorted(glob.glob("artifacts/*_*"))
+    if not run_directories:
+        log_message("error", "No run directories found in artifacts/")
+        return
 
-    history = load_json(history_path)
-    epochs_range = range(1, len(history["train_loss"]) + 1)
+    figure, axes = plt.subplots(1, 3, figsize=(18, 5))
 
-    plt.figure(figsize=(12, 5))
-    plt.subplot(1, 2, 1)
-    plt.plot(epochs_range, history["train_loss"], label="Training Loss")
-    plt.legend()
-    plt.subplot(1, 2, 2)
-    plt.plot(epochs_range, history["val_dice"], label="Validation DSC")
-    plt.plot(epochs_range, history["val_iou"], label="Validation IoU")
-    plt.legend()
+    color_palette = {"pranet": "#1A56DB", "unet": "#4B5563", "unetr": "#DC2626"}
+
+    for run_path in run_directories:
+        history_path = os.path.join(run_path, "model_history.json")
+        if not os.path.exists(history_path):
+            continue
+
+        model_history = load_json(history_path)
+        folder_name = os.path.basename(run_path)
+        model_label = folder_name.split("_")[-1]
+        color_key = model_label.lower()
+        line_color = color_palette.get(color_key, "#10B981")
+
+        epoch_count = len(model_history["train_loss"])
+        epoch_range = range(1, epoch_count + 1)
+
+        axes[0].plot(epoch_range, model_history["train_loss"], label=model_label, color=line_color, linewidth=2)
+
+        axes[1].plot(epoch_range, model_history["val_dice"], label=model_label, color=line_color, linewidth=2)
+
+        axes[2].plot(epoch_range, model_history["val_iou"], label=model_label, color=line_color, linewidth=2)
+
+    axes[0].set_title("Training Loss Convergence", fontsize=11, fontweight="bold", pad=12)
+    axes[0].set_xlabel("Epochs", fontsize=9)
+    axes[0].set_ylabel("Loss Value", fontsize=9)
+    axes[0].grid(True, linestyle="--", alpha=0.5)
+    axes[0].legend(loc="upper right", frameon=True)
+
+    axes[1].set_title("Validation Dice Coefficient (DSC)", fontsize=11, fontweight="bold", pad=12)
+    axes[1].set_xlabel("Epochs", fontsize=9)
+    axes[1].set_ylabel("DSC Score", fontsize=9)
+    axes[1].grid(True, linestyle="--", alpha=0.5)
+    axes[1].legend(loc="lower right", frameon=True)
+
+    axes[2].set_title("Validation Mean Intersection over Union (IoU)", fontsize=11, fontweight="bold", pad=12)
+    axes[2].set_xlabel("Epochs", fontsize=9)
+    axes[2].set_ylabel("IoU Score", fontsize=9)
+    axes[2].grid(True, linestyle="--", alpha=0.5)
+    axes[2].legend(loc="lower right", frameon=True)
 
     create_directory("docs/figs")
-    plt.savefig(f"docs/figs/performance_{os.path.basename(run_dir)}.png")
-    log_message("plot", "Performance figure generated in docs/figs/")
+    output_plot_path = "docs/figs/comparative_metrics_evaluation.png"
+    plt.tight_layout()
+    plt.savefig(output_plot_path, dpi=300)
+    plt.close()
+
+    log_message("plot", f"Comparative metrics graph successfully serialized to: {output_plot_path}")
 
 
 def execute_dataset_verification(data_dir):
@@ -54,7 +89,6 @@ def execute_unified_download_and_mapping(target_dir):
     for name, info in datasets.items():
         extract_dir = os.path.join(raw_dir, name)
 
-        # Check if already downloaded and extracted
         if os.path.exists(extract_dir) and len(os.listdir(extract_dir)) > 0:
             log_message("download", f"[{name}] already exists. Skipping download.")
             continue
@@ -89,7 +123,6 @@ def execute_unified_download_and_mapping(target_dir):
                 )
                 kaggle_extracted_files = glob.glob(os.path.join(raw_dir, "*"))
                 for file_path in kaggle_extracted_files:
-                    # Move extracted kaggle files into their specific dataset directory to avoid collisions
                     if (
                         os.path.isdir(file_path)
                         and file_path != extract_dir
@@ -162,6 +195,6 @@ if __name__ == "__main__":
     if args.mode == "verify":
         execute_dataset_verification(args.path or "dataset")
     elif args.mode == "plot":
-        execute_plot_generation(args.path)
+        execute_comparative_plot_generation()
     elif args.mode == "download":
         execute_unified_download_and_mapping(args.path or "dataset")
