@@ -38,8 +38,24 @@ def build_transforms(is_train, target_height, target_width):
 
 
 def get_data_dicts(data_dir):
-    image_paths = sorted(glob.glob(os.path.join(data_dir, "images", "*.*")))
-    mask_paths = sorted(glob.glob(os.path.join(data_dir, "masks", "*.*")))
+    valid_image_extensions = (".png",)
+
+    image_paths = sorted(
+        [
+            filepath
+            for filepath in glob.glob(os.path.join(data_dir, "images", "*.*"))
+            if filepath.lower().endswith(valid_image_extensions)
+        ]
+    )
+
+    mask_paths = sorted(
+        [
+            filepath
+            for filepath in glob.glob(os.path.join(data_dir, "masks", "*.*"))
+            if filepath.lower().endswith(valid_image_extensions)
+        ]
+    )
+
     return [{"image": img, "mask": msk} for img, msk in zip(image_paths, mask_paths)]
 
 
