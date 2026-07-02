@@ -28,6 +28,7 @@ def build_model(config):
             patch_size=(16, 16),
             classification=False,
             post_activation="Sigmoid",
+            spatial_dims=2,
         )
     elif architecture == "pranet":
         return PraNet(backbone_weights=config.get("backbone_weights"), pranet_weights=config.get("pranet_weights"))
