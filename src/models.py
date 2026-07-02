@@ -162,7 +162,8 @@ class ReverseAttention(nn.Module):
         self.conv = nn.Sequential(BasicConv(channel, channel, 3, padding=1), nn.Conv2d(channel, 1, 1))
 
     def forward(self, features, prior_mask):
-        reverse_mask = -1 * torch.sigmoid(prior_mask) + 1
+        resized_mask = F.interpolate(prior_mask, size=features.shape[2:], mode="bilinear", align_corners=True)
+        reverse_mask = -1 * torch.sigmoid(resized_mask) + 1
         return self.conv(features * reverse_mask)
 
 
@@ -183,7 +184,7 @@ class PraNet(nn.Module):
         self.ra2 = ReverseAttention(32)
 
         self.upsample2 = nn.Upsample(scale_factor=2, mode="bilinear", align_corners=True)
-        self.upsample4 = nn.Upsample(scale_factor=4, mode="bilinear", align_corners=True)
+        self.upsample8 = nn.Upsample(scale_factor=8, mode="bilinear", align_corners=True)
 
         self.map_out = nn.Conv2d(32, 1, 1)
 
@@ -209,9 +210,9 @@ class PraNet(nn.Module):
         ra3_pred = global_pred + self.upsample2(ra3_out)
 
         ra2_out = self.ra2(f2, ra3_pred)
-        ra2_pred = ra3_pred + self.upsample2(ra2_out)
+        ra2_pred = ra3_pred + ra2_out
 
-        return self.upsample4(ra2_pred)
+        return self.upsample8(ra2_pred)
 
 
 def build_loss():
