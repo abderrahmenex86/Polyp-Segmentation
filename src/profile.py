@@ -2,6 +2,7 @@ import gc
 
 import torch
 import torchinfo
+from tqdm.auto import tqdm
 
 from src.factory import build_model, build_optimizer
 from src.helpers import log_message
@@ -37,6 +38,9 @@ def profile_hardware_limits(config):
     while True:
         try:
             model = build_model(config).to(device)
+            if torch.cuda.device_count() > 1:
+                model = torch.nn.DataParallel(model)
+
             optimizer = build_optimizer(model, config)
             loss_fn = build_loss().to(device)
 
