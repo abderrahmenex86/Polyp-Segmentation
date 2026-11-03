@@ -34,7 +34,7 @@ convolutional decoder matters more than parameter count.
 ## Run it
 
 ```bash
-git clone https://github.com/abderrahmeneex86/Polyp-Segmentation
+git clone https://github.com/abderrahmenex86/Polyp-Segmentation
 cd Polyp-Segmentation
 pip install -r requirements.txt
 
